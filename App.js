@@ -9,16 +9,27 @@ import {
   Alert
 } from 'react-native';
 
+import { auth } from './firebase';
+import { signInAnonymously } from 'firebase/auth';
+
 const DATABASE_URL = 'https://cadastroalunos-ec6b6-default-rtdb.firebaseio.com';
 
 export default function App() {
   const [nome, setNome] = useState('');
   const [alunos, setAlunos] = useState([]);
   const [carregando, setCarregando] = useState(false);
+  const [autenticado, setAutenticado] = useState(false);
 
-  async function carregarAlunos() {
+  async function carregarAlunos(usuario) {
     try {
-      const resposta = await fetch(`${DATABASE_URL}/alunos.json`);
+      const token = await usuario.getIdToken();
+
+      const resposta = await fetch(
+        `${DATABASE_URL}/alunos.json?auth=${token}`
+      );
+
+      if (!resposta.ok) throw new Error('Erro ao buscar alunos');
+
       const dados = await resposta.json();
 
       if (dados) {
@@ -26,6 +37,7 @@ export default function App() {
           id,
           nome: dados[id].nome
         }));
+
         setAlunos(lista);
       } else {
         setAlunos([]);
@@ -41,34 +53,72 @@ export default function App() {
       return;
     }
 
+    const usuario = auth.currentUser;
+
+    if (!usuario) {
+      Alert.alert('Aguarde', 'Autenticação ainda não concluída.');
+      return;
+    }
+
     setCarregando(true);
 
     try {
-      const resposta = await fetch(`${DATABASE_URL}/alunos.json`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ nome: nome.trim() })
-      });
+      const token = await usuario.getIdToken();
+
+      const resposta = await fetch(
+        `${DATABASE_URL}/alunos.json?auth=${token}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ nome: nome.trim() })
+        }
+      );
 
       if (!resposta.ok) throw new Error('Erro ao cadastrar');
 
       setNome('');
-      await carregarAlunos();
+      await carregarAlunos(usuario);
 
     } catch (erro) {
       Alert.alert('Erro', 'Não foi possível cadastrar o aluno.');
+      console.log(erro);
     } finally {
       setCarregando(false);
     }
   }
 
   useEffect(() => {
-    carregarAlunos();
-    const intervalo = setInterval(carregarAlunos, 5000);
+    let intervalo;
 
-    return () => clearInterval(intervalo);
+    async function iniciarAutenticacao() {
+      try {
+        const credencial = await signInAnonymously(auth);
+        const usuario = credencial.user;
+
+        setAutenticado(true);
+
+        await carregarAlunos(usuario);
+
+        intervalo = setInterval(() => {
+          carregarAlunos(usuario);
+        }, 5000);
+
+      } catch (erro) {
+        console.log('Erro na autenticação:', erro);
+        Alert.alert(
+          'Erro',
+          'Não foi possível conectar ao Firebase.'
+        );
+      }
+    }
+
+    iniciarAutenticacao();
+
+    return () => {
+      if (intervalo) clearInterval(intervalo);
+    };
   }, []);
 
   return (
@@ -77,6 +127,10 @@ export default function App() {
 
       <Text style={styles.descricao}>
         Lista de alunos da turma
+      </Text>
+
+      <Text style={styles.status}>
+        {autenticado ? 'Conectado ao Firebase' : 'Conectando...'}
       </Text>
 
       <TextInput
@@ -89,7 +143,7 @@ export default function App() {
       <TouchableOpacity
         style={styles.botao}
         onPress={adicionarAluno}
-        disabled={carregando}
+        disabled={carregando || !autenticado}
       >
         <Text style={styles.textoBotao}>
           {carregando ? 'Salvando...' : 'Adicionar aluno'}
@@ -133,7 +187,11 @@ const styles = StyleSheet.create({
   descricao: {
     fontSize: 16,
     color: '#666',
-    marginBottom: 25
+    marginBottom: 10
+  },
+  status: {
+    color: 'green',
+    marginBottom: 15
   },
   input: {
     backgroundColor: '#fff',
